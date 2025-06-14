@@ -1,3 +1,3 @@
-# Eligibot 
+Smart Policy Think tank 
 
-AI Bot to check your Loan Eligibity and guide you!
+Indian Government policy analyzer.
