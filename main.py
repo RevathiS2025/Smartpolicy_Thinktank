@@ -12,6 +12,8 @@ import PyPDF2
 import io
 from pathlib import Path
 import re
+import streamlit as st
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -234,13 +236,14 @@ class LLMHandler:
         """Initialize OpenAI client based on model configuration"""
         load_dotenv()
         
+       
         # Get appropriate API key based on model
         if self.model_config.base_url == "https://openrouter.ai/api/v1":
             api_key = os.getenv("OPENROUTER_API_KEY")
             if not api_key:
                 raise ValueError("OPENROUTER_API_KEY not found in environment variables")
         else:
-            api_key = os.getenv("GROQ_API_KEY") or os.getenv("api_key")
+            api_key =  api_key = os.getenv("api_key", st.secrets.get("api_key")) or os.getenv("api_key")
             if not api_key:
                 raise ValueError("GROQ_API_KEY or api_key not found in environment variables")
         
