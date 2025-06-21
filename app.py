@@ -129,7 +129,7 @@ class PolicyAnalyzerApp:
         if 'analysis_history' not in st.session_state:
             st.session_state.analysis_history = []
         if 'current_model' not in st.session_state:
-            st.session_state.current_model = "llama3-8b"
+            st.session_state.current_model = "qwen"
         if 'processing' not in st.session_state:
             st.session_state.processing = False
     
