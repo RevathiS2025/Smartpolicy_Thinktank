@@ -4,6 +4,13 @@ import time
 from typing import Optional
 import logging
 from main import LLMHandler
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib.colors import HexColor
+import textwrap
+import re
 
 # Configure page
 st.set_page_config(
@@ -142,6 +149,374 @@ class PolicyAnalyzerApp:
             st.error(f"❌ Failed to initialize LLM: {str(e)}")
             st.info("Please check your GROQ_API_KEY in the .env file")
             st.stop()
+    
+    def clean_text_for_pdf(self, text: str) -> str:
+        """Clean text by removing markdown formatting and extra spaces"""
+        
+        # Remove markdown bold/italic formatting
+        text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # Remove **bold**
+        text = re.sub(r'\*([^*]+)\*', r'\1', text)      # Remove *italic*
+        text = re.sub(r'__([^_]+)__', r'\1', text)      # Remove __bold__
+        text = re.sub(r'_([^_]+)_', r'\1', text)        # Remove _italic_
+        
+        # Remove markdown headers but keep the text
+        text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)
+        
+        # Remove extra spaces and normalize whitespace
+        text = re.sub(r'[ \t]+', ' ', text)             # Multiple spaces to single space
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Multiple newlines to double newline
+        text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)  # Trim lines
+        
+        # Remove bullet points markdown
+        text = re.sub(r'^[\s]*[-*+]\s*', '', text, flags=re.MULTILINE)
+        
+        # Remove numbered list markdown
+        text = re.sub(r'^[\s]*\d+\.\s*', '', text, flags=re.MULTILINE)
+        
+        return text.strip()
+
+    def parse_policy_sections(self, text: str) -> dict:
+        """Parse text into main policy sections"""
+        sections = {}
+        
+        # Common policy section keywords
+        section_keywords = [
+            'objective', 'objectives', 'purpose', 'aim', 'goals',
+            'implementation', 'execution', 'deployment', 'rollout',
+            'rights', 'entitlements', 'benefits', 'provisions',
+            'impact', 'effects', 'consequences', 'outcomes',
+            'analysis', 'assessment', 'evaluation', 'review',
+            'summary', 'overview', 'conclusion', 'findings',
+            'recommendations', 'suggestions', 'proposals',
+            'eligibility', 'criteria', 'requirements', 'conditions',
+            'procedure', 'process', 'steps', 'methodology',
+            'timeline', 'schedule', 'phases', 'milestones'
+        ]
+        
+        # Split text into potential sections
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        current_section = "POLICY OVERVIEW"
+        current_content = []
+        
+        for line in lines:
+            # Check if line is likely a section header
+            is_header = False
+            line_lower = line.lower()
+            
+            # Header detection logic
+            if (len(line.split()) <= 8 and 
+                (any(keyword in line_lower for keyword in section_keywords) or
+                 line.isupper() or
+                 line.endswith(':') or
+                 (len(line) < 100 and any(char in line for char in [':', '•', '-'])))):
+                is_header = True
+            
+            if is_header and current_content:
+                # Save previous section
+                sections[current_section] = '\n'.join(current_content)
+                current_section = line.replace(':', '').strip()
+                current_content = []
+            else:
+                current_content.append(line)
+        
+        # Add final section
+        if current_content:
+            sections[current_section] = '\n'.join(current_content)
+        
+        return sections
+
+    def parse_subsections(self, content: str) -> dict:
+        """Parse section content into subsections"""
+        subsections = {}
+        lines = [line.strip() for line in content.split('\n') if line.strip()]
+        
+        current_subsection = ""
+        current_content = []
+        
+        for line in lines:
+            # Check if line is a subsection header
+            is_subsection = (
+                len(line.split()) <= 6 and
+                (line.endswith(':') or 
+                 line.isupper() or
+                 any(word in line.lower() for word in ['key', 'main', 'important', 'critical', 'essential']))
+            )
+            
+            if is_subsection and current_content:
+                subsections[current_subsection] = '\n'.join(current_content)
+                current_subsection = line.replace(':', '').strip()
+                current_content = []
+            elif is_subsection:
+                current_subsection = line.replace(':', '').strip()
+            else:
+                current_content.append(line)
+        
+        # Add final subsection
+        subsections[current_subsection] = '\n'.join(current_content)
+        
+        return subsections
+
+    def extract_bullet_points(self, text: str) -> list:
+        """Extract and format bullet points from text"""
+        bullet_points = []
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        
+        for line in lines:
+            # Clean up existing bullet markers
+            line_clean = re.sub(r'^[-•*➤►▪▫◦‣⁃]\s*', '', line)
+            line_clean = re.sub(r'^\d+\.\s*', '', line_clean)
+            
+            # Split long sentences into bullet points
+            if len(line_clean) > 20:  # Only process substantial content
+                # Split on common separators that indicate separate points
+                if any(separator in line_clean for separator in [';', ':', ',']):
+                    # Split on semicolons first (strongest separator)
+                    parts = line_clean.split(';')
+                    for part in parts:
+                        part = part.strip()
+                        if len(part) > 10:  # Avoid very short fragments
+                            bullet_points.append(part)
+                else:
+                    bullet_points.append(line_clean)
+        
+        return bullet_points
+
+    def generate_executive_summary(self, text: str) -> list:
+        """Generate executive summary bullet points"""
+        summary_points = []
+        
+        # Extract key sentences based on common policy indicators
+        sentences = [s.strip() for s in text.split('.') if len(s.strip()) > 20]
+        
+        key_indicators = [
+            'objective', 'aim', 'purpose', 'goal',
+            'implement', 'establish', 'create', 'develop',
+            'benefit', 'impact', 'effect', 'result',
+            'citizen', 'public', 'people', 'individual',
+            'policy', 'scheme', 'program', 'initiative'
+        ]
+        
+        for sentence in sentences[:10]:  # Limit to top 10 sentences
+            sentence_lower = sentence.lower()
+            if any(indicator in sentence_lower for indicator in key_indicators):
+                summary_points.append(sentence.strip())
+        
+        # If no key sentences found, use first few sentences
+        if not summary_points:
+            summary_points = sentences[:5]
+        
+        return summary_points[:7]  # Limit to 7 key points
+
+    def create_pdf_analysis(self, summary: str, source: str) -> bytes:
+        """Create a professionally formatted PDF from the analysis with enhanced structure"""
+        try:
+            buffer = io.BytesIO()
+            
+            # Create document with Indian government themed styling
+            doc = SimpleDocTemplate(
+                buffer, 
+                pagesize=A4,
+                rightMargin=50,
+                leftMargin=50,
+                topMargin=60,
+                bottomMargin=60
+            )
+            
+            # Define enhanced styles with Indian government colors
+            styles = getSampleStyleSheet()
+            
+            # Custom title style
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontSize=26,
+                spaceAfter=24,
+                spaceBefore=12,
+                textColor=HexColor('#000080'),  # Navy blue
+                alignment=1,  # Center alignment
+                fontName='Helvetica-Bold'
+            )
+            
+            # Custom subtitle style
+            subtitle_style = ParagraphStyle(
+                'CustomSubtitle',
+                parent=styles['Heading2'],
+                fontSize=16,
+                spaceAfter=16,
+                spaceBefore=8,
+                textColor=HexColor('#FF9933'),  # Saffron
+                alignment=1,  # Center alignment
+                fontName='Helvetica-Bold'
+            )
+            
+            # Custom main heading style (for major sections)
+            main_heading_style = ParagraphStyle(
+                'MainHeading',
+                parent=styles['Heading1'],
+                fontSize=16,
+                spaceAfter=12,
+                spaceBefore=20,
+                textColor=HexColor('#000080'),  # Navy blue
+                fontName='Helvetica-Bold',
+                borderWidth=1,
+                borderColor=HexColor('#FF9933'),
+                borderPadding=8,
+                backColor=HexColor('#F8F8FF')  # Light blue background
+            )
+            
+            # Custom sub-heading style
+            sub_heading_style = ParagraphStyle(
+                'SubHeading',
+                parent=styles['Heading2'],
+                fontSize=14,
+                spaceAfter=8,
+                spaceBefore=12,
+                textColor=HexColor('#138808'),  # Green
+                fontName='Helvetica-Bold',
+                leftIndent=10
+            )
+            
+            # Custom body style
+            body_style = ParagraphStyle(
+                'CustomBody',
+                parent=styles['Normal'],
+                fontSize=11,
+                spaceAfter=6,
+                spaceBefore=2,
+                textColor=HexColor('#000000'),
+                fontName='Helvetica',
+                leading=14,
+                leftIndent=20
+            )
+            
+            # Custom bullet point style
+            bullet_style = ParagraphStyle(
+                'BulletStyle',
+                parent=styles['Normal'],
+                fontSize=11,
+                spaceAfter=4,
+                spaceBefore=2,
+                textColor=HexColor('#000000'),
+                fontName='Helvetica',
+                leading=13,
+                leftIndent=30,
+                bulletIndent=10,
+                bulletFontName='Symbol'
+            )
+            
+            # Custom metadata style
+            meta_style = ParagraphStyle(
+                'MetaStyle',
+                parent=styles['Normal'],
+                fontSize=10,
+                spaceAfter=4,
+                textColor=HexColor('#138808'),  # Green
+                fontName='Helvetica-Oblique',
+                alignment=1  # Center alignment
+            )
+            
+            # Header style for document info
+            header_style = ParagraphStyle(
+                'HeaderStyle',
+                parent=styles['Normal'],
+                fontSize=10,
+                spaceAfter=2,
+                textColor=HexColor('#666666'),
+                fontName='Helvetica',
+                alignment=0
+            )
+            
+            # Build document content
+            story = []
+            
+            # Title and Header
+            story.append(Paragraph("🇮🇳 GOVERNMENT OF INDIA", title_style))
+            story.append(Paragraph("Smart Policy ThinkTank", subtitle_style))
+            story.append(Paragraph("Comprehensive Policy Analysis Report", sub_heading_style))
+            story.append(Spacer(1, 20))
+            
+            # Document Information Box
+            story.append(Paragraph("DOCUMENT INFORMATION", main_heading_style))
+            current_time = time.strftime("%B %d, %Y at %I:%M %p")
+            story.append(Paragraph(f"<b>Generated:</b> {current_time}", header_style))
+            story.append(Paragraph(f"<b>Source Document:</b> {source}", header_style))
+            story.append(Paragraph(f"<b>Analysis Model:</b> {st.session_state.current_model.upper()}", header_style))
+            story.append(Paragraph(f"<b>Report ID:</b> SPT-{int(time.time())}", header_style))
+            story.append(Spacer(1, 20))
+            
+            # Clean and process the summary text
+            clean_summary = self.clean_text_for_pdf(summary)
+            
+            # Enhanced text processing with better structure detection
+            sections = self.parse_policy_sections(clean_summary)
+            
+            for section_title, section_content in sections.items():
+                # Add main section heading
+                story.append(Paragraph(section_title.upper(), main_heading_style))
+                
+                # Process section content
+                subsections = self.parse_subsections(section_content)
+                
+                for subsection_title, subsection_content in subsections.items():
+                    if subsection_title:
+                        # Add subsection heading
+                        story.append(Paragraph(subsection_title, sub_heading_style))
+                    
+                    # Process content into bullet points or paragraphs
+                    bullet_points = self.extract_bullet_points(subsection_content)
+                    
+                    if bullet_points:
+                        for point in bullet_points:
+                            if point.strip():
+                                story.append(Paragraph(f"• {point.strip()}", bullet_style))
+                    else:
+                        # Add as regular paragraph if no bullet points detected
+                        paragraphs = [p.strip() for p in subsection_content.split('\n') if p.strip()]
+                        for para in paragraphs:
+                            if para:
+                                story.append(Paragraph(para, body_style))
+                    
+                    story.append(Spacer(1, 8))
+            
+            # Summary section if not already included
+            if not any('summary' in section.lower() for section in sections.keys()):
+                story.append(Paragraph("EXECUTIVE SUMMARY", main_heading_style))
+                summary_points = self.generate_executive_summary(clean_summary)
+                for point in summary_points:
+                    story.append(Paragraph(f"• {point}", bullet_style))
+                story.append(Spacer(1, 15))
+            
+            # Footer section
+            story.append(Spacer(1, 30))
+            story.append(Paragraph("DISCLAIMER & LEGAL NOTICE", main_heading_style))
+            
+            disclaimer_points = [
+                "This analysis is generated by AI and is intended for informational purposes only.",
+                "Users should verify all information with official government sources.",
+                "This report does not constitute legal advice or official government policy interpretation.",
+                "For authoritative guidance, please consult relevant government departments and officials.",
+                "The analysis may not reflect the most current policy updates or amendments."
+            ]
+            
+            for point in disclaimer_points:
+                story.append(Paragraph(f"• {point}", bullet_style))
+            
+            story.append(Spacer(1, 20))
+            story.append(Paragraph("Generated by Smart Policy ThinkTank | Powered by Powerpuff Girls", meta_style))
+            story.append(Paragraph("For technical support and feedback, contact the development team", meta_style))
+            
+            # Build PDF
+            doc.build(story)
+            
+            # Get PDF data
+            pdf_data = buffer.getvalue()
+            buffer.close()
+            
+            return pdf_data
+            
+        except Exception as e:
+            logger.error(f"Enhanced PDF creation error: {e}")
+            raise e
     
     def render_sidebar(self):
         """Render sidebar with settings and info"""
@@ -338,7 +713,7 @@ class PolicyAnalyzerApp:
         st.subheader("Paste Policy Text")
         
         policy_text = st.text_area(
-            "Paste your Governmen policy here:",
+            "Paste your Government policy here:",
             height=300,
             placeholder="Copy and paste the Government policy text here...",
             help="Paste the full text of the Government policy you want to analyze"
@@ -451,21 +826,37 @@ class PolicyAnalyzerApp:
             st.markdown(summary)
             
             # Action buttons
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
+            
             with col1:
                 if st.download_button(
-                    "📥 Download Analysis",
+                    "📥 Download TXT",
                     data=summary,
                     file_name=f"policy_analysis_{int(time.time())}.txt",
                     mime="text/plain"
                 ):
-                    st.success("Analysis downloaded!")
+                    st.success("TXT downloaded!")
             
             with col2:
+                try:
+                    pdf_data = self.create_pdf_analysis(summary, source)
+                    if st.download_button(
+                        "📄 Download PDF",
+                        data=pdf_data,
+                        file_name=f"policy_analysis_{int(time.time())}.pdf",
+                        mime="application/pdf"
+                    ):
+                        st.success("PDF downloaded!")
+                except Exception as e:
+                    if st.button("📄 Download PDF"):
+                        st.error(f"PDF generation failed: {str(e)}")
+                        st.info("💡 Try installing: pip install reportlab")
+            
+            with col3:
                 if st.button("📋 Copy to Clipboard"):
                     st.info("Use your browser's copy function on the analysis text above")
             
-            with col3:
+            with col4:
                 if st.button("🔄 Analyze Again"):
                     st.rerun()
         

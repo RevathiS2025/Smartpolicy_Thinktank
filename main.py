@@ -243,7 +243,8 @@ class LLMHandler:
             if not api_key:
                 raise ValueError("OPENROUTER_API_KEY not found in environment variables")
         else:
-            api_key =  api_key = os.getenv("api_key", st.secrets.get("api_key")) or os.getenv("api_key")
+            ##api_key = os.getenv("api_key") or os.getenv("GROQ_API_KEY")
+            api_key = os.getenv("api_key", st.secrets.get("api_key")) or os.getenv("api_key") or os.getenv("GROQ_API_KEY") 
             if not api_key:
                 raise ValueError("GROQ_API_KEY or api_key not found in environment variables")
         

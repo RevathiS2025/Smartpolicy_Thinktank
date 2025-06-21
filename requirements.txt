@@ -3,3 +3,4 @@ python-dotenv
 PyPDF2
 openai
 pathlib
+reportlab
